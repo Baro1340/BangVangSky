@@ -1,0 +1,71 @@
+{
+  "players": {
+    "0 Iu Them Mot Ai#01053": {
+      "riot_id": "0 Iu Them Mot Ai#01053",
+      "tier": "MASTER",
+      "division": "I",
+      "lp": 303,
+      "wins": 118,
+      "losses": 108,
+      "winrate": 52,
+      "discord_name": "lam on hay binh tinh",
+      "discord_id": 1015301439897223249
+    },
+    "ONBET Keria1#0512": {
+      "riot_id": "ONBET Keria1#0512",
+      "tier": "GRANDMASTER",
+      "division": "I",
+      "lp": 1011,
+      "wins": 89,
+      "losses": 59,
+      "winrate": 60,
+      "discord_name": "Lưu Quang Phát",
+      "discord_id": 599035955621396480
+    },
+    "meo1#2002": {
+      "riot_id": "meo1#2002",
+      "tier": "MASTER",
+      "division": "I",
+      "lp": 116,
+      "wins": 31,
+      "losses": 25,
+      "winrate": 55,
+      "discord_name": "ppp",
+      "discord_id": 781939404578750556
+    },
+    "Otis#MOLLY": {
+      "riot_id": "Otis#MOLLY",
+      "tier": "MASTER",
+      "division": "I",
+      "lp": 323,
+      "wins": 119,
+      "losses": 111,
+      "winrate": 52,
+      "discord_name": "1 hero li sin",
+      "discord_id": 561976164789256192
+    },
+    "Đối Thủ Xứng Tầm#9nwuh": {
+      "riot_id": "Đối Thủ Xứng Tầm#9nwuh",
+      "tier": "DIAMOND",
+      "division": "I",
+      "lp": 0,
+      "wins": 31,
+      "losses": 30,
+      "winrate": 51,
+      "discord_name": "Hành Trình Mới",
+      "discord_id": 759370107364966401
+    },
+    "Bún Bò Thanh Hoá#3636": {
+      "riot_id": "Bún Bò Thanh Hoá#3636",
+      "tier": "MASTER",
+      "division": "I",
+      "lp": 32,
+      "wins": 138,
+      "losses": 124,
+      "winrate": 53,
+      "discord_name": "Mệt mõi vì anh",
+      "discord_id": 1119559975908417586
+    }
+  },
+  "leaderboard_message_id": null
+}
