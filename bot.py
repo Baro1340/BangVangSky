@@ -16,6 +16,16 @@ LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
 NOTIFY_CHANNEL_ID = int(os.getenv("NOTIFY_CHANNEL_ID", "0"))
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 
+# DEBUG CHI TIẾT
+print("=" * 50)
+print("🔍 DEBUG ENVIRONMENT VARIABLES:")
+print(f"DISCORD_TOKEN: {'*' * 10}{TOKEN[-5:] if TOKEN else 'KHÔNG CÓ'}")
+print(f"DISCORD_TOKEN length: {len(TOKEN) if TOKEN else 0}")
+print(f"LEADERBOARD_CHANNEL_ID: {LEADERBOARD_CHANNEL_ID}")
+print(f"NOTIFY_CHANNEL_ID: {NOTIFY_CHANNEL_ID}")
+print(f"RIOT_API_KEY: {'*' * 10}{RIOT_API_KEY[-5:] if RIOT_API_KEY else 'KHÔNG CÓ'}")
+print("=" * 50)
+
 # Thêm debug
 if not TOKEN:
     print("❌ Không tìm thấy DISCORD_TOKEN trong environment variables!")
