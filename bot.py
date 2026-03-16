@@ -32,7 +32,10 @@ if not TOKEN:
     # Không exit ngay vì Render sẽ hiển thị lỗi
 
 UPDATE_INTERVAL_HOURS = 24  # 24 giờ kể từ khi start
-DATA_FILE = "players.json"
+DATA_FILE = r"C:\lol_rank_bot\players.json"
+print(f"📁 Đường dẫn file: {os.path.abspath(DATA_FILE)}")
+print(f"📁 Thư mục hiện tại: {os.getcwd()}")
+print(f"📁 Có quyền ghi không? {os.access(os.getcwd(), os.W_OK)}")
 LEADERBOARD_HISTORY_FILE = "leaderboard_history.json"
 
 if not TOKEN:
@@ -64,13 +67,24 @@ RANK_EMOJI = {
 
 def load_data():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+                print(f"📖 Đọc file: {len(content)} ký tự")
+                return json.loads(content)
+        except Exception as e:
+            print(f"❌ Lỗi đọc file: {e}")
+            return {"players": {}}
     return {"players": {}}
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"💾 Đang lưu {len(data['players'])} người chơi vào file...")
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"✅ Lưu thành công! File size: {os.path.getsize(DATA_FILE)} bytes")
+    except Exception as e:
+        print(f"❌ LỖI KHI LƯU FILE: {e}")
 
 def load_history():
     if os.path.exists(LEADERBOARD_HISTORY_FILE):
@@ -328,6 +342,7 @@ async def register(ctx, *, riot_id: str = None):
     result["discord_name"] = ctx.author.display_name
     result["discord_id"] = ctx.author.id
     data["players"][riot_id] = result
+
     save_data(data)
     
     tier = result.get("tier", "UNRANKED")
