@@ -4,10 +4,11 @@ import aiohttp
 import json
 import os
 import asyncio
+import psycopg2
+from psycopg2.extras import Json
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from keep_alive import keep_alive	
-
+from keep_alive import keep_alive
 
 load_dotenv()
 
@@ -15,6 +16,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID", "0"))
 NOTIFY_CHANNEL_ID = int(os.getenv("NOTIFY_CHANNEL_ID", "0"))
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # DEBUG CHI TIẾT
 print("=" * 50)
@@ -24,26 +26,21 @@ print(f"DISCORD_TOKEN length: {len(TOKEN) if TOKEN else 0}")
 print(f"LEADERBOARD_CHANNEL_ID: {LEADERBOARD_CHANNEL_ID}")
 print(f"NOTIFY_CHANNEL_ID: {NOTIFY_CHANNEL_ID}")
 print(f"RIOT_API_KEY: {'*' * 10}{RIOT_API_KEY[-5:] if RIOT_API_KEY else 'KHÔNG CÓ'}")
+print(f"DATABASE_URL: {'*' * 10}{DATABASE_URL[-10:] if DATABASE_URL else 'KHÔNG CÓ'}")
 print("=" * 50)
 
-# Thêm debug
 if not TOKEN:
-    print("❌ Không tìm thấy DISCORD_TOKEN trong environment variables!")
-    # Không exit ngay vì Render sẽ hiển thị lỗi
-
-UPDATE_INTERVAL_HOURS = 24  # 24 giờ kể từ khi start
-DATA_FILE = r"C:\lol_rank_bot\players.json"
-print(f"📁 Đường dẫn file: {os.path.abspath(DATA_FILE)}")
-print(f"📁 Thư mục hiện tại: {os.getcwd()}")
-print(f"📁 Có quyền ghi không? {os.access(os.getcwd(), os.W_OK)}")
-LEADERBOARD_HISTORY_FILE = "leaderboard_history.json"
-
-if not TOKEN:
-    print("❌ Không tìm thấy DISCORD_TOKEN trong file .env!")
+    print("❌ Không tìm thấy DISCORD_TOKEN!")
     exit(1)
 if not RIOT_API_KEY:
-    print("❌ Không tìm thấy RIOT_API_KEY trong file .env!")
+    print("❌ Không tìm thấy RIOT_API_KEY!")
     exit(1)
+if not DATABASE_URL:
+    print("❌ Không tìm thấy DATABASE_URL! Bot sẽ dùng JSON fallback")
+
+UPDATE_INTERVAL_HOURS = 24
+DATA_FILE = "players.json"
+LEADERBOARD_HISTORY_FILE = "leaderboard_history.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -65,36 +62,185 @@ RANK_EMOJI = {
     "UNRANKED": "❓",
 }
 
-def load_data():
+# ==================== DATABASE FUNCTIONS ====================
+
+def init_database():
+    """Khởi tạo database và tạo các bảng cần thiết"""
+    if not DATABASE_URL:
+        print("⚠️ DATABASE_URL not found, skipping database init")
+        return False
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        # Tạo bảng players
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS players (
+                riot_id TEXT PRIMARY KEY,
+                data JSONB NOT NULL,
+                discord_id TEXT,
+                discord_name TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Tạo bảng leaderboard history
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS leaderboard_history (
+                id SERIAL PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                date TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("✅ Database initialized successfully")
+        return True
+    except Exception as e:
+        print(f"❌ Database initialization error: {e}")
+        return False
+
+def load_from_db():
+    """Đọc dữ liệu từ database"""
+    if not DATABASE_URL:
+        return None
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        # Lấy tất cả players
+        cur.execute("SELECT riot_id, data FROM players")
+        rows = cur.fetchall()
+        
+        players = {}
+        for riot_id, data in rows:
+            players[riot_id] = data
+        
+        # Lấy leaderboard message ID gần nhất
+        cur.execute("SELECT message_id FROM leaderboard_history ORDER BY id DESC LIMIT 1")
+        msg_row = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        result = {"players": players}
+        if msg_row:
+            result["leaderboard_message_id"] = int(msg_row[0])
+        
+        print(f"✅ Loaded {len(players)} players from database")
+        return result
+    except Exception as e:
+        print(f"❌ Database load error: {e}")
+        return None
+
+def save_to_db(data):
+    """Lưu dữ liệu vào database"""
+    if not DATABASE_URL:
+        return False
+    
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        # Xóa dữ liệu cũ và insert mới
+        cur.execute("DELETE FROM players")
+        
+        # Insert từng player
+        for riot_id, player_data in data["players"].items():
+            cur.execute(
+                "INSERT INTO players (riot_id, data, discord_id, discord_name) VALUES (%s, %s, %s, %s)",
+                (riot_id, Json(player_data), player_data.get("discord_id"), player_data.get("discord_name"))
+            )
+        
+        # Lưu leaderboard message ID nếu có
+        if data.get("leaderboard_message_id"):
+            cur.execute("DELETE FROM leaderboard_history")
+            cur.execute(
+                "INSERT INTO leaderboard_history (message_id, channel_id, date) VALUES (%s, %s, %s)",
+                (str(data["leaderboard_message_id"]), 
+                 str(LEADERBOARD_CHANNEL_ID),
+                 datetime.now().strftime("%d/%m/%Y"))
+            )
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"✅ Saved {len(data['players'])} players to database")
+        return True
+    except Exception as e:
+        print(f"❌ Database save error: {e}")
+        return False
+
+# ==================== JSON FUNCTIONS (FALLBACK) ====================
+
+def load_from_json():
+    """Đọc dữ liệu từ file JSON (fallback)"""
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 content = f.read()
-                print(f"📖 Đọc file: {len(content)} ký tự")
+                print(f"📖 Đọc file JSON: {len(content)} ký tự")
                 return json.loads(content)
         except Exception as e:
-            print(f"❌ Lỗi đọc file: {e}")
+            print(f"❌ Lỗi đọc file JSON: {e}")
             return {"players": {}}
     return {"players": {}}
 
-def save_data(data):
-    print(f"💾 Đang lưu {len(data['players'])} người chơi vào file...")
+def save_to_json(data):
+    """Lưu dữ liệu vào file JSON (fallback)"""
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"✅ Lưu thành công! File size: {os.path.getsize(DATA_FILE)} bytes")
+        print(f"✅ Saved {len(data['players'])} players to JSON")
+        return True
     except Exception as e:
-        print(f"❌ LỖI KHI LƯU FILE: {e}")
+        print(f"❌ JSON save error: {e}")
+        return False
 
 def load_history():
+    """Đọc lịch sử từ file JSON"""
     if os.path.exists(LEADERBOARD_HISTORY_FILE):
         with open(LEADERBOARD_HISTORY_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {"messages": []}
 
 def save_history(history):
+    """Lưu lịch sử vào file JSON"""
     with open(LEADERBOARD_HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
+
+# ==================== MAIN DATA FUNCTIONS ====================
+
+def load_data():
+    """Load data: ưu tiên database, fallback sang JSON"""
+    if DATABASE_URL:
+        db_data = load_from_db()
+        if db_data and db_data["players"]:
+            return db_data
+    
+    print("⚠️ Using JSON fallback for load_data")
+    return load_from_json()
+
+def save_data(data):
+    """Save data: lưu vào cả database và JSON"""
+    json_success = save_to_json(data)
+    
+    if DATABASE_URL:
+        db_success = save_to_db(data)
+        if db_success:
+            print("✅ Data saved to both JSON and database")
+        else:
+            print("⚠️ Data saved to JSON only (database failed)")
+    else:
+        print("✅ Data saved to JSON only (no database)")
+
+# ==================== RANK FUNCTIONS ====================
 
 def rank_score(p):
     tier = p.get("tier", "UNRANKED").upper()
@@ -116,8 +262,6 @@ async def fetch_player_rank(riot_id: str) -> dict:
             async with s.get(url1, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 print(f"[DEBUG] PUUID status: {r.status}")
                 if r.status != 200:
-                    body = await r.text()
-                    print(f"[DEBUG] PUUID body: {body[:200]}")
                     return {"error": f"Không tìm thấy tài khoản `{riot_id}`"}
                 account = await r.json()
                 puuid = account.get("puuid")
@@ -126,24 +270,17 @@ async def fetch_player_rank(riot_id: str) -> dict:
         url2 = f"https://vn2.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}"
         async with aiohttp.ClientSession() as s:
             async with s.get(url2, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                print(f"[DEBUG] Rank by PUUID status: {r.status}")
                 if r.status == 200:
                     entries = await r.json()
-                    print(f"[DEBUG] Entries: {str(entries)[:300]}")
                 else:
-                    body = await r.text()
-                    print(f"[DEBUG] Rank by PUUID failed: {body[:200]}")
                     entries = []
 
-        # Nếu endpoint PUUID không có, fallback sang summoner ID
+        # Nếu không có, fallback sang summoner ID
         if not entries:
             url3 = f"https://vn2.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}"
             async with aiohttp.ClientSession() as s:
                 async with s.get(url3, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                    print(f"[DEBUG] Summoner status: {r.status}")
                     if r.status != 200:
-                        body = await r.text()
-                        print(f"[DEBUG] Summoner body: {body[:200]}")
                         return {"error": f"Không tìm thấy summoner `{riot_id}`"}
                     summoner = await r.json()
                     summoner_id = summoner.get("id")
@@ -151,12 +288,10 @@ async def fetch_player_rank(riot_id: str) -> dict:
             url4 = f"https://vn2.api.riotgames.com/lol/league/v4/entries/by-summoner/{summoner_id}"
             async with aiohttp.ClientSession() as s:
                 async with s.get(url4, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                    print(f"[DEBUG] Rank status: {r.status}")
-                    if r.status != 200:
-                        entries = []
-                    else:
+                    if r.status == 200:
                         entries = await r.json()
-                        print(f"[DEBUG] Entries: {str(entries)[:300]}")
+                    else:
+                        entries = []
 
         # Xử lý kết quả
         solo = next((e for e in entries if e.get("queueType") == "RANKED_SOLO_5x5"), None)
@@ -180,6 +315,8 @@ async def fetch_player_rank(riot_id: str) -> dict:
         import traceback
         print(f"[ERROR] {traceback.format_exc()}")
         return {"error": str(e)}
+
+# ==================== EMBED FUNCTIONS ====================
 
 def build_leaderboard_embed(players, date_str=None):
     if date_str is None:
@@ -225,10 +362,11 @@ def build_leaderboard_embed(players, date_str=None):
     embed.set_footer(text="Đăng ký: !register <Tên#TAG> • Cập nhật mỗi 24h kể từ khi bot start")
     return embed
 
-# SỬA: Chạy mỗi 24 giờ kể từ khi start
-@tasks.loop(hours=24)  # 24 giờ kể từ lần chạy đầu tiên
+# ==================== TASKS ====================
+
+@tasks.loop(hours=24)
 async def daily_leaderboard():
-    """Tạo bảng xếp hạng mới mỗi 24 giờ kể từ khi start"""
+    """Tạo bảng xếp hạng mới mỗi 24 giờ"""
     data = load_data()
     if not data["players"]:
         return
@@ -238,10 +376,9 @@ async def daily_leaderboard():
         return
     
     notify_ch = bot.get_channel(NOTIFY_CHANNEL_ID)
-    current_time = datetime.now(timezone.utc).strftime('%H:%M:%S %d/%m/%Y')
-    print(f"[{current_time}] Đang tạo bảng xếp hạng mới (24h cycle)...")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Đang tạo bảng xếp hạng mới...")
     
-    # Cập nhật rank cho tất cả players trước khi tạo bảng mới
+    # Cập nhật rank cho tất cả players
     updated_players = []
     rank_changes = []
     
@@ -251,7 +388,7 @@ async def daily_leaderboard():
         old_division = pdata.get("division", "")
         
         new = await fetch_player_rank(riot_id)
-        await asyncio.sleep(1.5)  # Tránh rate limit
+        await asyncio.sleep(1.5)
         
         if "error" in new:
             updated_players.append(pdata)
@@ -262,7 +399,6 @@ async def daily_leaderboard():
         data["players"][riot_id] = new
         updated_players.append(new)
         
-        # Ghi nhận thay đổi để thông báo
         new_tier = new.get("tier", "UNRANKED")
         new_lp = new.get("lp", 0)
         new_division = new.get("division", "")
@@ -278,11 +414,9 @@ async def daily_leaderboard():
     
     save_data(data)
     
-    # Tạo và gửi bảng xếp hạng mới
+    # Gửi bảng mới
     now = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S")
     embed = build_leaderboard_embed(updated_players, now)
-    
-    # Gửi bảng mới
     new_msg = await channel.send(embed=embed)
     
     # Lưu lịch sử
@@ -306,16 +440,15 @@ async def daily_leaderboard():
         notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)}")
         await notify_ch.send(embed=notif)
     
-    print(f"[OK] Đã tạo bảng xếp hạng mới lúc {now} với {len(updated_players)} người.")
+    print(f"[OK] Đã tạo bảng mới với {len(updated_players)} người.")
 
-# SỬA: Before loop - chạy lần đầu sau 24 giờ kể từ khi start
 @daily_leaderboard.before_loop
 async def before_daily():
     await bot.wait_until_ready()
-    # Tính thời gian chờ lần đầu: 24 giờ từ bây giờ
     first_run = datetime.now(timezone.utc) + timedelta(hours=24)
-    print(f"⏰ Lần chạy đầu tiên: {first_run.strftime('%d/%m/%Y %H:%M:%S')} UTC (sau 24 giờ)")
-    print(f"   Bot sẽ tự động gửi bảng xếp hạng mới mỗi 24 giờ kể từ thời điểm này")
+    print(f"⏰ Lần chạy đầu tiên: {first_run.strftime('%d/%m/%Y %H:%M:%S')} UTC")
+
+# ==================== COMMANDS ====================
 
 @bot.command(name="register")
 async def register(ctx, *, riot_id: str = None):
@@ -342,7 +475,6 @@ async def register(ctx, *, riot_id: str = None):
     result["discord_name"] = ctx.author.display_name
     result["discord_id"] = ctx.author.id
     data["players"][riot_id] = result
-
     save_data(data)
     
     tier = result.get("tier", "UNRANKED")
@@ -352,6 +484,29 @@ async def register(ctx, *, riot_id: str = None):
     rank_str = f"{tier} {division} {lp} LP".strip() if tier != "UNRANKED" else "Unranked"
     
     await msg.edit(content=f"✅ **{ctx.author.display_name}** đã đăng ký!\n{emoji} **{riot_id}** — `{rank_str}`")
+
+@bot.command(name="addplayer")
+@commands.has_permissions(manage_guild=True)
+async def add_player(ctx, riot_id: str = None, member: discord.Member = None):
+    if not riot_id:
+        await ctx.send("❌ Cú pháp: `!addplayer <Tên#TAG> [@discord]`")
+        return
+    
+    msg = await ctx.send(f"⏳ Đang tìm **{riot_id}**...")
+    result = await fetch_player_rank(riot_id)
+    
+    if "error" in result:
+        await msg.edit(content=f"❌ {result['error']}")
+        return
+    
+    data = load_data()
+    result["discord_name"] = member.display_name if member else ""
+    result["discord_id"] = member.id if member else None
+    data["players"][riot_id] = result
+    save_data(data)
+    
+    emoji = RANK_EMOJI.get(result.get("tier", "UNRANKED").upper(), "❓")
+    await msg.edit(content=f"✅ Đã thêm {emoji} **{riot_id}**!")
 
 @bot.command(name="unregister")
 async def unregister(ctx):
@@ -365,6 +520,17 @@ async def unregister(ctx):
     del data["players"][found]
     save_data(data)
     await ctx.send(f"✅ Đã xóa **{found}** khỏi bảng.")
+
+@bot.command(name="removeplayer")
+@commands.has_permissions(manage_guild=True)
+async def remove_player(ctx, *, riot_id: str):
+    data = load_data()
+    if riot_id in data["players"]:
+        del data["players"][riot_id]
+        save_data(data)
+        await ctx.send(f"✅ Đã xóa **{riot_id}**.")
+    else:
+        await ctx.send(f"❌ Không tìm thấy `{riot_id}`.")
 
 @bot.command(name="rank")
 async def rank_cmd(ctx, *, riot_id: str = None):
@@ -406,13 +572,11 @@ async def rank_cmd(ctx, *, riot_id: str = None):
 
 @bot.command(name="today")
 async def today_cmd(ctx):
-    """Xem bảng xếp hạng mới nhất"""
     history = load_history()
     if not history["messages"]:
         await ctx.send("❌ Chưa có bảng xếp hạng nào.")
         return
     
-    # Lấy bảng mới nhất
     latest = history["messages"][-1]
     channel = bot.get_channel(latest["channel_id"])
     
@@ -425,7 +589,6 @@ async def today_cmd(ctx):
 
 @bot.command(name="history")
 async def history_cmd(ctx):
-    """Xem lịch sử các bảng xếp hạng"""
     history = load_history()
     if not history["messages"]:
         await ctx.send("❌ Chưa có lịch sử bảng xếp hạng.")
@@ -447,7 +610,6 @@ async def history_cmd(ctx):
 
 @bot.command(name="lb")
 async def lb_cmd(ctx):
-    """Alias cho today"""
     await today_cmd(ctx)
 
 @bot.command(name="players")
@@ -463,44 +625,9 @@ async def players_cmd(ctx):
 @bot.command(name="update")
 @commands.has_permissions(manage_guild=True)
 async def update_cmd(ctx):
-    """Force cập nhật và tạo bảng mới"""
     await ctx.send("🔄 Đang cập nhật và tạo bảng mới...")
-    await daily_leaderboard()  # Gọi trực tiếp task
+    await daily_leaderboard()
     await ctx.send("✅ Đã tạo bảng xếp hạng mới!")
-
-@bot.command(name="addplayer")
-@commands.has_permissions(manage_guild=True)
-async def add_player(ctx, riot_id: str = None, member: discord.Member = None):
-    if not riot_id:
-        await ctx.send("❌ Cú pháp: `!addplayer <Tên#TAG> [@discord]`")
-        return
-    
-    msg = await ctx.send(f"⏳ Đang tìm **{riot_id}**...")
-    result = await fetch_player_rank(riot_id)
-    
-    if "error" in result:
-        await msg.edit(content=f"❌ {result['error']}")
-        return
-    
-    data = load_data()
-    result["discord_name"] = member.display_name if member else ""
-    result["discord_id"] = member.id if member else None
-    data["players"][riot_id] = result
-    save_data(data)
-    
-    emoji = RANK_EMOJI.get(result.get("tier", "UNRANKED").upper(), "❓")
-    await msg.edit(content=f"✅ Đã thêm {emoji} **{riot_id}**!")
-
-@bot.command(name="removeplayer")
-@commands.has_permissions(manage_guild=True)
-async def remove_player(ctx, *, riot_id: str):
-    data = load_data()
-    if riot_id in data["players"]:
-        del data["players"][riot_id]
-        save_data(data)
-        await ctx.send(f"✅ Đã xóa **{riot_id}**.")
-    else:
-        await ctx.send(f"❌ Không tìm thấy `{riot_id}`.")
 
 @bot.command(name="help")
 async def help_cmd(ctx):
@@ -535,7 +662,9 @@ async def on_ready():
     print(f"🔔 Notify channel: {NOTIFY_CHANNEL_ID}")
     print(f"⏰ Sẽ tạo bảng mới mỗi 24 giờ kể từ khi bot start")
     
-    # Khởi động task daily
+    # Khởi tạo database
+    init_database()
+    
     daily_leaderboard.start()
 
 @bot.event
@@ -546,7 +675,9 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ Thiếu tham số. Dùng `!help` để xem hướng dẫn.")
     else:
         print(f"Lỗi: {error}")
+
 # Giữ bot thức 24/7 trên Render
 keep_alive()
 
-bot.run(TOKEN)
+if __name__ == "__main__":
+    bot.run(TOKEN)
