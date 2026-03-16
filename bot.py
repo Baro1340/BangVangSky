@@ -560,16 +560,19 @@ async def bangvang_cmd(ctx):
     })
     save_history(history)
     
-    # Thông báo thay đổi rank (nếu có) vào kênh notify
-    if rank_changes and NOTIFY_CHANNEL_ID:
-        notify_ch = bot.get_channel(NOTIFY_CHANNEL_ID)
-        if notify_ch and ctx.channel.id != NOTIFY_CHANNEL_ID:
-            notif = discord.Embed(
-                title=f"📊 Cập nhật rank • {datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')}", 
-                description="\n".join(rank_changes[:10]) + ("\n..." if len(rank_changes) > 10 else ""), 
-                color=0x5865F2, 
-                timestamp=datetime.now(timezone.utc)
-            )
+    # Thông báo thay đổi rank ngay tại kênh hiện tại
+    if rank_changes:
+        notif = discord.Embed(
+            title=f"📊 Cập nhật rank • {datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')}", 
+            description="\n".join(rank_changes[:10]) + ("\n..." if len(rank_changes) > 10 else ""), 
+            color=0x5865F2, 
+            timestamp=datetime.now(timezone.utc)
+        )
+     notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} • Người dùng: {ctx.author.display_name}")
+    
+     # Gửi tại kênh hiện tại
+     await ctx.send(embed=notif)
+             )
             notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} • Người dùng: {ctx.author.display_name}")
             await notify_ch.send(embed=notif)
 
