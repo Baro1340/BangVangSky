@@ -35,8 +35,6 @@ if not TOKEN:
 if not RIOT_API_KEY:
     print("❌ Không tìm thấy RIOT_API_KEY!")
     exit(1)
-if not DATABASE_URL:
-    print("❌ Không tìm thấy DATABASE_URL! Bot sẽ dùng JSON fallback")
 
 UPDATE_INTERVAL_HOURS = 24
 DATA_FILE = "players.json"
@@ -47,6 +45,9 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 HEADERS = {"X-Riot-Token": RIOT_API_KEY}
+
+# Múi giờ Việt Nam
+VN_TZ = timezone(timedelta(hours=7))
 
 RANK_ORDER = {
     "UNRANKED": -1,
@@ -165,7 +166,7 @@ def save_to_db(data):
                 "INSERT INTO leaderboard_history (message_id, channel_id, date) VALUES (%s, %s, %s)",
                 (str(data["leaderboard_message_id"]), 
                  str(LEADERBOARD_CHANNEL_ID),
-                 datetime.now().strftime("%d/%m/%Y"))
+                 datetime.now(VN_TZ).strftime("%d/%m/%Y"))
             )
         
         conn.commit()
@@ -318,9 +319,11 @@ async def fetch_player_rank(riot_id: str) -> dict:
 
 # ==================== EMBED FUNCTIONS ====================
 
-def build_leaderboard_embed(players, date_str=None):
-    if date_str is None:
-        date_str = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S")
+def build_leaderboard_embed(players):
+    """Tạo embed bảng xếp hạng với giờ Việt Nam"""
+    # Lấy giờ Việt Nam hiện tại
+    vn_now = datetime.now(VN_TZ)
+    vn_time_str = vn_now.strftime("%H:%M %d/%m/%Y")
     
     embed = discord.Embed(
         title=f"🏆 Bảng Xếp Hạng LoL — VN2", 
@@ -330,6 +333,7 @@ def build_leaderboard_embed(players, date_str=None):
     
     if not players:
         embed.description = "Chưa có ai.\nDùng `!register <Tên#TAG>` để đăng ký!"
+        embed.set_footer(text=f"Cập nhật: {vn_time_str} • Đăng ký: !register <Tên#TAG>")
         return embed
     
     sorted_players = sorted(players, key=rank_score, reverse=True)
@@ -359,14 +363,31 @@ def build_leaderboard_embed(players, date_str=None):
         lines.append(f"{pos} {emoji} **{riot_id}**{tag}\n　`{rank_str}` | {winrate}% WR ({wins}W/{losses}L)")
     
     embed.description = "\n\n".join(lines)
-    embed.set_footer(text="Đăng ký: !register <Tên#TAG> • Cập nhật mỗi 24h kể từ khi bot start")
+    embed.set_footer(text=f"📅 Cập nhật lúc {vn_time_str} • Đăng ký: !register <Tên#TAG>")
     return embed
 
 # ==================== TASKS ====================
 
-@tasks.loop(hours=24)
+async def get_time_until_7am():
+    """Tính thời gian chờ đến 7h sáng hôm sau"""
+    vn_now = datetime.now(VN_TZ)
+    # Tạo mốc 7h sáng hôm nay
+    target = vn_now.replace(hour=7, minute=0, second=0, microsecond=0)
+    
+    # Nếu đã qua 7h sáng, tính đến 7h sáng hôm sau
+    if vn_now >= target:
+        target += timedelta(days=1)
+    
+    # Chuyển về UTC để tính thời gian chờ
+    target_utc = target.astimezone(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    
+    wait_seconds = (target_utc - now_utc).total_seconds()
+    return wait_seconds, target
+
+@tasks.loop(hours=24)  # Chạy mỗi 24h, nhưng thời gian bắt đầu được điều chỉnh
 async def daily_leaderboard():
-    """Tạo bảng xếp hạng mới mỗi 24 giờ"""
+    """Tạo bảng xếp hạng mới lúc 7h sáng giờ Việt Nam"""
     data = load_data()
     if not data["players"]:
         return
@@ -376,9 +397,10 @@ async def daily_leaderboard():
         return
     
     notify_ch = bot.get_channel(NOTIFY_CHANNEL_ID)
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Đang tạo bảng xếp hạng mới...")
+    vn_now = datetime.now(VN_TZ)
+    print(f"[{vn_now.strftime('%H:%M:%S %d/%m/%Y')}] Đang tạo bảng xếp hạng mới (7h sáng GMT+7)...")
     
-    # Cập nhật rank cho tất cả players
+    # Cập nhật rank cho tất cả players trước khi tạo bảng mới
     updated_players = []
     rank_changes = []
     
@@ -388,7 +410,7 @@ async def daily_leaderboard():
         old_division = pdata.get("division", "")
         
         new = await fetch_player_rank(riot_id)
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(1.5)  # Tránh rate limit
         
         if "error" in new:
             updated_players.append(pdata)
@@ -399,6 +421,7 @@ async def daily_leaderboard():
         data["players"][riot_id] = new
         updated_players.append(new)
         
+        # Ghi nhận thay đổi để thông báo
         new_tier = new.get("tier", "UNRANKED")
         new_lp = new.get("lp", 0)
         new_division = new.get("division", "")
@@ -414,9 +437,10 @@ async def daily_leaderboard():
     
     save_data(data)
     
+    # Tạo và gửi bảng xếp hạng mới
+    embed = build_leaderboard_embed(updated_players)
+    
     # Gửi bảng mới
-    now = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S")
-    embed = build_leaderboard_embed(updated_players, now)
     new_msg = await channel.send(embed=embed)
     
     # Lưu lịch sử
@@ -424,7 +448,7 @@ async def daily_leaderboard():
     history["messages"].append({
         "message_id": new_msg.id,
         "channel_id": channel.id,
-        "date": now,
+        "date": vn_now.strftime("%d/%m/%Y"),
         "timestamp": datetime.now(timezone.utc).isoformat()
     })
     save_history(history)
@@ -432,7 +456,7 @@ async def daily_leaderboard():
     # Thông báo thay đổi rank
     if rank_changes and notify_ch:
         notif = discord.Embed(
-            title=f"📊 Cập nhật rank • {now}", 
+            title=f"📊 Cập nhật rank • {vn_now.strftime('%H:%M %d/%m/%Y')}", 
             description="\n".join(rank_changes[:10]) + ("\n..." if len(rank_changes) > 10 else ""), 
             color=0x5865F2, 
             timestamp=datetime.now(timezone.utc)
@@ -440,13 +464,22 @@ async def daily_leaderboard():
         notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)}")
         await notify_ch.send(embed=notif)
     
-    print(f"[OK] Đã tạo bảng mới với {len(updated_players)} người.")
+    print(f"[OK] Đã tạo bảng xếp hạng mới lúc {vn_now.strftime('%H:%M:%S %d/%m/%Y')} với {len(updated_players)} người.")
 
 @daily_leaderboard.before_loop
 async def before_daily():
+    """Đợi đến 7h sáng hôm sau để chạy lần đầu"""
     await bot.wait_until_ready()
-    first_run = datetime.now(timezone.utc) + timedelta(hours=24)
-    print(f"⏰ Lần chạy đầu tiên: {first_run.strftime('%d/%m/%Y %H:%M:%S')} UTC")
+    wait_seconds, target_time = await get_time_until_7am()
+    
+    hours = int(wait_seconds // 3600)
+    minutes = int((wait_seconds % 3600) // 60)
+    
+    print(f"⏰ Lần chạy đầu tiên: {target_time.strftime('%H:%M %d/%m/%Y')} (giờ Việt Nam)")
+    print(f"⏳ Còn {hours} giờ {minutes} phút nữa sẽ tạo bảng đầu tiên")
+    print(f"📅 Sau đó tự động cập nhật lúc 7h sáng mỗi ngày")
+    
+    await asyncio.sleep(wait_seconds)
 
 # ==================== COMMANDS ====================
 
@@ -572,11 +605,13 @@ async def rank_cmd(ctx, *, riot_id: str = None):
 
 @bot.command(name="today")
 async def today_cmd(ctx):
+    """Xem bảng xếp hạng mới nhất"""
     history = load_history()
     if not history["messages"]:
         await ctx.send("❌ Chưa có bảng xếp hạng nào.")
         return
     
+    # Lấy bảng mới nhất
     latest = history["messages"][-1]
     channel = bot.get_channel(latest["channel_id"])
     
@@ -589,6 +624,7 @@ async def today_cmd(ctx):
 
 @bot.command(name="history")
 async def history_cmd(ctx):
+    """Xem lịch sử các bảng xếp hạng"""
     history = load_history()
     if not history["messages"]:
         await ctx.send("❌ Chưa có lịch sử bảng xếp hạng.")
@@ -605,11 +641,12 @@ async def history_cmd(ctx):
         lines.append(f"`{i+1}.` **{entry['date']}** — [Jump to message](https://discord.com/channels/{ctx.guild.id}/{entry['channel_id']}/{entry['message_id']})")
     
     embed.description = "\n".join(lines)
-    embed.set_footer(text="Cập nhật mỗi 24h • Dùng !today để xem bảng mới nhất")
+    embed.set_footer(text="Cập nhật mỗi ngày lúc 7h sáng • Dùng !today để xem bảng mới nhất")
     await ctx.send(embed=embed)
 
 @bot.command(name="lb")
 async def lb_cmd(ctx):
+    """Alias cho today"""
     await today_cmd(ctx)
 
 @bot.command(name="players")
@@ -625,15 +662,38 @@ async def players_cmd(ctx):
 @bot.command(name="update")
 @commands.has_permissions(manage_guild=True)
 async def update_cmd(ctx):
+    """Force cập nhật và tạo bảng mới"""
     await ctx.send("🔄 Đang cập nhật và tạo bảng mới...")
     await daily_leaderboard()
     await ctx.send("✅ Đã tạo bảng xếp hạng mới!")
+
+@bot.command(name="next")
+async def next_cmd(ctx):
+    """Xem thời gian tạo bảng tiếp theo"""
+    wait_seconds, target_time = await get_time_until_7am()
+    
+    hours = int(wait_seconds // 3600)
+    minutes = int((wait_seconds % 3600) // 60)
+    
+    vn_now = datetime.now(VN_TZ)
+    
+    embed = discord.Embed(
+        title="⏰ Lịch cập nhật bảng xếp hạng",
+        color=0x5865F2,
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(name="Hiện tại", value=f"{vn_now.strftime('%H:%M %d/%m/%Y')}", inline=True)
+    embed.add_field(name="Cập nhật tiếp theo", value=f"{target_time.strftime('%H:%M %d/%m/%Y')}", inline=True)
+    embed.add_field(name="Còn lại", value=f"{hours} giờ {minutes} phút", inline=True)
+    embed.set_footer(text="Tự động cập nhật lúc 7h sáng mỗi ngày")
+    
+    await ctx.send(embed=embed)
 
 @bot.command(name="help")
 async def help_cmd(ctx):
     embed = discord.Embed(
         title="📖 Hướng dẫn Bot LoL Rank",
-        description="Bot tự động tạo bảng xếp hạng mới **mỗi 24 giờ** kể từ khi khởi động",
+        description="Bot tự động cập nhật bảng xếp hạng **lúc 7h sáng mỗi ngày** (giờ Việt Nam)",
         color=0x5865F2
     )
     
@@ -643,16 +703,17 @@ async def help_cmd(ctx):
         "`!rank <Tên#TAG>` — Xem rank\n"
         "`!today` hoặc `!lb` — Xem bảng mới nhất\n"
         "`!history` — Lịch sử bảng xếp hạng\n"
-        "`!players` — Danh sách người chơi"
+        "`!players` — Danh sách người chơi\n"
+        "`!next` — Xem lịch cập nhật tiếp theo"
     ), inline=False)
     
     embed.add_field(name="🔧 Admin", value=(
         "`!addplayer <Tên#TAG> [@discord]` — Thêm người chơi\n"
         "`!removeplayer <Tên#TAG>` — Xóa người chơi\n"
-        "`!update` — Force tạo bảng mới ngay"
+        "`!update` — Force cập nhật ngay"
     ), inline=False)
     
-    embed.set_footer(text="Tự động tạo bảng mới mỗi 24h kể từ khi start • Riot API")
+    embed.set_footer(text="Cập nhật lúc 7h sáng hàng ngày • Riot API")
     await ctx.send(embed=embed)
 
 @bot.event
@@ -660,11 +721,12 @@ async def on_ready():
     print(f"✅ Bot online: {bot.user}")
     print(f"📋 Leaderboard channel: {LEADERBOARD_CHANNEL_ID}")
     print(f"🔔 Notify channel: {NOTIFY_CHANNEL_ID}")
-    print(f"⏰ Sẽ tạo bảng mới mỗi 24 giờ kể từ khi bot start")
+    print(f"⏰ Lịch cập nhật: 7h sáng giờ Việt Nam mỗi ngày")
     
     # Khởi tạo database
     init_database()
     
+    # Khởi động task daily
     daily_leaderboard.start()
 
 @bot.event
