@@ -568,13 +568,16 @@ async def bangvang_cmd(ctx):
             color=0x5865F2, 
             timestamp=datetime.now(timezone.utc)
         )
-     notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} • Người dùng: {ctx.author.display_name}")
-    
-     # Gửi tại kênh hiện tại
-     await ctx.send(embed=notif)
-             )
-            notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} • Người dùng: {ctx.author.display_name}")
-            await notify_ch.send(embed=notif)
+        notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} • Người dùng: {ctx.author.display_name}")
+        
+        # Gửi tại kênh hiện tại
+        await ctx.send(embed=notif)
+        
+        # Gửi vào kênh notify nếu có
+        if NOTIFY_CHANNEL_ID:
+            notify_ch = bot.get_channel(NOTIFY_CHANNEL_ID)
+            if notify_ch and ctx.channel.id != NOTIFY_CHANNEL_ID:
+                await notify_ch.send(embed=notif)
 
 @bot.command(name="register")
 async def register(ctx, *, riot_id: str = None):
