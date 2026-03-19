@@ -4,6 +4,7 @@ import aiohttp
 import json
 import os
 import asyncio
+import random
 import psycopg2
 from psycopg2.extras import Json
 from datetime import datetime, timezone, timedelta
@@ -471,6 +472,10 @@ async def daily_leaderboard():
 async def before_daily():
     """Đợi đến 7h sáng hôm sau để chạy lần đầu"""
     await bot.wait_until_ready()
+    
+    # Thêm delay ngẫu nhiên để tránh rate limit
+    await asyncio.sleep(random.randint(5, 15))
+    
     wait_seconds, target_time = await get_time_until_7am()
     
     hours = int(wait_seconds // 3600)
@@ -515,7 +520,7 @@ async def bangvang_cmd(ctx):
         old_division = pdata.get("division", "")
         
         new = await fetch_player_rank(riot_id)
-        await asyncio.sleep(1.5)  # Tránh rate limit
+        await asyncio.sleep(1.5)  # Tránh rate limit Riot API
         
         if "error" in new:
             updated_players.append(pdata)
@@ -788,6 +793,9 @@ async def help_cmd(ctx):
 
 @bot.event
 async def on_ready():
+    # Thêm delay ngẫu nhiên khi khởi động để tránh rate limit
+    await asyncio.sleep(random.randint(3, 8))
+    
     print(f"✅ Bot online: {bot.user}")
     print(f"📋 Leaderboard channel: {LEADERBOARD_CHANNEL_ID}")
     print(f"🔔 Notify channel: {NOTIFY_CHANNEL_ID}")
@@ -797,7 +805,8 @@ async def on_ready():
     # Khởi tạo database
     init_database()
     
-    # Khởi động task daily
+    # Khởi động task daily với delay
+    await asyncio.sleep(random.randint(2, 5))
     daily_leaderboard.start()
 
 @bot.event
@@ -812,5 +821,26 @@ async def on_command_error(ctx, error):
 # Giữ bot thức 24/7 trên Render
 keep_alive()
 
+# Hàm chạy bot với retry khi bị rate limit
+async def run_bot():
+    max_retries = 5
+    base_delay = 30
+    
+    for attempt in range(max_retries):
+        try:
+            await bot.start(TOKEN)
+            break
+        except discord.errors.HTTPException as e:
+            if e.status == 429:  # Rate limit
+                delay = base_delay * (2 ** attempt) + random.randint(10, 30)
+                print(f"⚠️ Rate limited (attempt {attempt + 1}/{max_retries})")
+                print(f"⏳ Chờ {delay} giây trước khi thử lại...")
+                await asyncio.sleep(delay)
+            else:
+                raise e
+        except Exception as e:
+            print(f"❌ Lỗi không xác định: {e}")
+            break
+
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    asyncio.run(run_bot())
