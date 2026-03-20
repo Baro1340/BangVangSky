@@ -682,7 +682,9 @@ async def run_bot():
         except discord.errors.HTTPException as e:
             print(f"❌ LỖI HTTP {e.status}: {e.text}")
             if e.status == 429:
-                await asyncio.sleep(120)
+                wait_minutes = 30
+                print(f"⏳ Bị rate limit, chờ {wait_minutes} phút trước khi thử lại...")
+                await asyncio.sleep(wait_minutes * 60)
             else:
                 break
         except Exception as e:
