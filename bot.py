@@ -918,6 +918,7 @@ async def on_command_error(ctx, error):
         print(f"Lỗi: {error}")
 
 # Giữ bot thức 24/7 trên Render
+print("🚀 Khởi động web server...")
 keep_alive()
 
 # Hàm chạy bot với retry khi bị rate limit
@@ -927,6 +928,7 @@ async def run_bot():
     
     for attempt in range(max_retries):
         try:
+            print(f"🔄 Đang kết nối bot đến Discord (lần {attempt + 1})...")
             await bot.start(TOKEN)
             break
         except discord.errors.HTTPException as e:
@@ -936,10 +938,12 @@ async def run_bot():
                 print(f"⏳ Chờ {int(delay/60)} phút {delay%60} giây trước khi thử lại...")
                 await asyncio.sleep(delay)
             else:
+                print(f"❌ Lỗi HTTP: {e}")
                 raise e
         except Exception as e:
             print(f"❌ Lỗi không xác định: {e}")
-            break
+            await asyncio.sleep(60)  # Chờ 1 phút rồi thử lại
+            continue
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
