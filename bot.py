@@ -841,35 +841,32 @@ async def on_command_error(ctx, error):
 # ==================== ENTRY POINT ====================
 
 async def run_bot():
-    max_retries = 10
-    base_delay = 60
-    
-    for attempt in range(max_retries):
+    for attempt in range(10):
         try:
             print(f"🔄 Đang kết nối bot đến Discord (lần {attempt + 1})...")
-            print(f"📌 Token bắt đầu bằng: {TOKEN[:10]}...")
             await bot.start(TOKEN)
             break
             
         except discord.errors.LoginFailure as e:
-            print(f"❌ LỖI LOGIN: Token không hợp lệ! {e}")
-            print(f"📌 5 ký tự cuối token: ...{TOKEN[-5:]}")
-            print(f"🔄 Vui lòng kiểm tra lại token trên Discord Developer Portal")
+            print(f"❌ LỖI LOGIN: {e}")
             break
             
+        except discord.errors.PrivilegedIntentsRequired as e:
+            print(f"❌ LỖI INTENTS: Chưa bật Privileged Intents trên Discord Developer Portal! {e}")
+            break
+
         except discord.errors.HTTPException as e:
+            print(f"❌ LỖI HTTP {e.status}: {e.text}")
             if e.status == 429:
-                delay = base_delay * (2 ** min(attempt, 5)) + random.randint(30, 60)
-                print(f"⚠️ Rate limited (attempt {attempt + 1}/{max_retries})")
-                print(f"⏳ Chờ {int(delay/60)} phút {delay%60} giây trước khi thử lại...")
-                await asyncio.sleep(delay)
+                await asyncio.sleep(120)
             else:
-                print(f"❌ Lỗi HTTP: {e}")
-                raise e
+                break
                 
         except Exception as e:
-            print(f"❌ Lỗi không xác định: {type(e).__name__}: {e}")
-            await asyncio.sleep(60)
+            import traceback
+            print(f"❌ LỖI KHÔNG XÁC ĐỊNH: {type(e).__name__}: {e}")
+            print(traceback.format_exc())  # In full traceback
+            await asyncio.sleep(30)
 
 if __name__ == "__main__":
     # Khởi động web server trong thread riêng TRƯỚC, sau đó mới chạy bot
