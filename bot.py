@@ -72,10 +72,6 @@ RANK_EMOJI = {
 # ==================== KIỂM TRA SERVER ====================
 
 async def check_guild(ctx):
-    """Kiểm tra xem lệnh có được gọi từ server được phép không"""
-    if ctx.guild.id != ALLOWED_GUILD_ID:
-        await ctx.send("❌ Bot này chỉ được sử dụng trong server Bảng Vàng Sky!")
-        return False
     return True
 
 # ==================== DATABASE FUNCTIONS ====================
