@@ -19,6 +19,10 @@ NOTIFY_CHANNEL_ID = int(os.getenv("NOTIFY_CHANNEL_ID", "0"))
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# ID SERVER DUY NHẤT ĐƯỢC PHÉP SỬ DỤNG BOT
+# Thay thế bằng ID server của bạn (lấy bằng cách chuột phải server → Copy ID)
+ALLOWED_GUILD_ID = 937257968968286328  # ID server Bảng Vàng Sky
+
 # DEBUG CHI TIẾT
 print("=" * 50)
 print("🔍 DEBUG ENVIRONMENT VARIABLES:")
@@ -28,6 +32,7 @@ print(f"LEADERBOARD_CHANNEL_ID: {LEADERBOARD_CHANNEL_ID}")
 print(f"NOTIFY_CHANNEL_ID: {NOTIFY_CHANNEL_ID}")
 print(f"RIOT_API_KEY: {'*' * 10}{RIOT_API_KEY[-5:] if RIOT_API_KEY else 'KHÔNG CÓ'}")
 print(f"DATABASE_URL: {'*' * 10}{DATABASE_URL[-10:] if DATABASE_URL else 'KHÔNG CÓ'}")
+print(f"ALLOWED_GUILD_ID: {ALLOWED_GUILD_ID}")
 print("=" * 50)
 
 if not TOKEN:
@@ -63,6 +68,15 @@ RANK_EMOJI = {
     "MASTER": "🔮", "GRANDMASTER": "🔴", "CHALLENGER": "🏆",
     "UNRANKED": "❓",
 }
+
+# ==================== KIỂM TRA SERVER ====================
+
+async def check_guild(ctx):
+    """Kiểm tra xem lệnh có được gọi từ server được phép không"""
+    if ctx.guild.id != ALLOWED_GUILD_ID:
+        await ctx.send("❌ Bot này chỉ được sử dụng trong server Bảng Vàng Sky!")
+        return False
+    return True
 
 # ==================== DATABASE FUNCTIONS ====================
 
@@ -491,11 +505,11 @@ async def before_daily():
 
 @bot.command(name="bangvang")
 async def bangvang_cmd(ctx):
-    """
-    Lệnh duy nhất để xem bảng xếp hạng - AI CŨNG DÙNG ĐƯỢC
-    - Tự động cập nhật rank mới nhất
-    - Tạo bảng mới và hiển thị
-    """
+    """Lệnh duy nhất để xem bảng xếp hạng - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
     
     # Gửi thông báo đang xử lý
     msg = await ctx.send("🔄 Đang cập nhật rank và tạo bảng xếp hạng...")
@@ -586,6 +600,12 @@ async def bangvang_cmd(ctx):
 
 @bot.command(name="register")
 async def register(ctx, *, riot_id: str = None):
+    """Đăng ký tham gia bảng xếp hạng - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     if not riot_id:
         await ctx.send("❌ Cú pháp: `!register <Tên#TAG>`\nVD: `!register 0 Iu Them Mot Ai#01053`")
         return
@@ -622,6 +642,12 @@ async def register(ctx, *, riot_id: str = None):
 @bot.command(name="addplayer")
 @commands.has_permissions(manage_guild=True)
 async def add_player(ctx, riot_id: str = None, member: discord.Member = None):
+    """Thêm người chơi (admin) - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     if not riot_id:
         await ctx.send("❌ Cú pháp: `!addplayer <Tên#TAG> [@discord]`")
         return
@@ -644,6 +670,12 @@ async def add_player(ctx, riot_id: str = None, member: discord.Member = None):
 
 @bot.command(name="unregister")
 async def unregister(ctx):
+    """Hủy đăng ký của bạn - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     data = load_data()
     found = next((k for k, v in data["players"].items() if v.get("discord_id") == ctx.author.id), None)
     
@@ -658,6 +690,12 @@ async def unregister(ctx):
 @bot.command(name="removeplayer")
 @commands.has_permissions(manage_guild=True)
 async def remove_player(ctx, *, riot_id: str):
+    """Xóa người chơi (admin) - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     data = load_data()
     if riot_id in data["players"]:
         del data["players"][riot_id]
@@ -668,6 +706,12 @@ async def remove_player(ctx, *, riot_id: str):
 
 @bot.command(name="rank")
 async def rank_cmd(ctx, *, riot_id: str = None):
+    """Xem rank của một người chơi - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     if not riot_id:
         await ctx.send("❌ Cú pháp: `!rank <Tên#TAG>`")
         return
@@ -706,7 +750,12 @@ async def rank_cmd(ctx, *, riot_id: str = None):
 
 @bot.command(name="history")
 async def history_cmd(ctx):
-    """Xem lịch sử các bảng xếp hạng"""
+    """Xem lịch sử các bảng xếp hạng - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     history = load_history()
     if not history["messages"]:
         await ctx.send("❌ Chưa có lịch sử bảng xếp hạng.")
@@ -729,6 +778,12 @@ async def history_cmd(ctx):
 
 @bot.command(name="players")
 async def players_cmd(ctx):
+    """Xem danh sách người chơi - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     data = load_data()
     if not data["players"]:
         await ctx.send("Chưa có ai. Dùng `!register <Tên#TAG>` để đăng ký!")
@@ -739,7 +794,12 @@ async def players_cmd(ctx):
 
 @bot.command(name="next")
 async def next_cmd(ctx):
-    """Xem thời gian tạo bảng tiếp theo"""
+    """Xem thời gian tạo bảng tiếp theo - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     wait_seconds, target_time = await get_time_until_7am()
     
     hours = int(wait_seconds // 3600)
@@ -759,11 +819,47 @@ async def next_cmd(ctx):
     
     await ctx.send(embed=embed)
 
+@bot.command(name="invite")
+@commands.has_permissions(administrator=True)
+async def invite_cmd(ctx):
+    """Tạo link invite bot (chỉ admin) - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
+    permissions = discord.Permissions()
+    permissions.send_messages = True
+    permissions.embed_links = True
+    permissions.read_message_history = True
+    permissions.add_reactions = True
+    permissions.use_slash_commands = True
+    
+    invite_url = discord.utils.oauth_url(
+        bot.user.id,
+        permissions=permissions,
+        scopes=["bot", "applications.commands"]
+    )
+    
+    embed = discord.Embed(
+        title="🔗 Link Invite Bot",
+        description=f"[Click vào đây để invite bot]({invite_url})\n\n**Lưu ý:** Bot đã được cấu hình chỉ hoạt động trong server Bảng Vàng Sky.",
+        color=0x5865F2
+    )
+    await ctx.send(embed=embed)
+
 @bot.command(name="help")
 async def help_cmd(ctx):
+    """Hướng dẫn sử dụng bot - CHỈ HOẠT ĐỘNG TRONG SERVER ĐƯỢC PHÉP"""
+    
+    # KIỂM TRA SERVER
+    if not await check_guild(ctx):
+        return
+    
     embed = discord.Embed(
         title="📖 Hướng dẫn Bot LoL Rank",
-        description="Bot tự động cập nhật bảng xếp hạng **lúc 7h sáng mỗi ngày** (giờ Việt Nam)",
+        description="Bot tự động cập nhật bảng xếp hạng **lúc 7h sáng mỗi ngày** (giờ Việt Nam)\n\n"
+                   "**🔒 BẢO MẬT:** Bot chỉ hoạt động trong server Bảng Vàng Sky!",
         color=0x5865F2
     )
     
@@ -779,13 +875,15 @@ async def help_cmd(ctx):
     
     embed.add_field(name="🔧 Admin (quyền quản lý)", value=(
         "`!addplayer <Tên#TAG> [@discord]` — Thêm người chơi (không cần họ tự đăng ký)\n"
-        "`!removeplayer <Tên#TAG>` — Xóa người chơi khỏi bảng"
+        "`!removeplayer <Tên#TAG>` — Xóa người chơi khỏi bảng\n"
+        "`!invite` — Tạo link invite bot"
     ), inline=False)
     
     embed.add_field(name="📌 Lưu ý", value=(
         "• Bảng xếp hạng tự động cập nhật lúc **7h sáng** mỗi ngày\n"
         "• **Mọi người đều có thể dùng `!bangvang`** để cập nhật rank và xem bảng mới nhất bất kỳ lúc nào\n"
-        "• Dùng `!next` để xem thời gian cập nhật tự động tiếp theo"
+        "• Dùng `!next` để xem thời gian cập nhật tự động tiếp theo\n"
+        "• **🔒 Bot được bảo mật - chỉ hoạt động trong server này!**"
     ), inline=False)
     
     embed.set_footer(text="Cập nhật lúc 7h sáng hàng ngày • Riot API")
@@ -801,6 +899,7 @@ async def on_ready():
     print(f"🔔 Notify channel: {NOTIFY_CHANNEL_ID}")
     print(f"⏰ Lịch cập nhật: 7h sáng giờ Việt Nam mỗi ngày")
     print(f"💡 Mọi người đều có thể dùng !bangvang để cập nhật và xem bảng")
+    print(f"🔒 BẢO MẬT: Bot chỉ hoạt động trong server có ID {ALLOWED_GUILD_ID}")
     
     # Khởi tạo database
     init_database()
@@ -823,8 +922,8 @@ keep_alive()
 
 # Hàm chạy bot với retry khi bị rate limit
 async def run_bot():
-    max_retries = 5
-    base_delay = 30
+    max_retries = 10
+    base_delay = 60
     
     for attempt in range(max_retries):
         try:
@@ -832,9 +931,9 @@ async def run_bot():
             break
         except discord.errors.HTTPException as e:
             if e.status == 429:  # Rate limit
-                delay = base_delay * (2 ** attempt) + random.randint(10, 30)
+                delay = base_delay * (2 ** min(attempt, 5)) + random.randint(30, 60)
                 print(f"⚠️ Rate limited (attempt {attempt + 1}/{max_retries})")
-                print(f"⏳ Chờ {delay} giây trước khi thử lại...")
+                print(f"⏳ Chờ {int(delay/60)} phút {delay%60} giây trước khi thử lại...")
                 await asyncio.sleep(delay)
             else:
                 raise e
