@@ -929,8 +929,18 @@ async def run_bot():
     for attempt in range(max_retries):
         try:
             print(f"🔄 Đang kết nối bot đến Discord (lần {attempt + 1})...")
+            print(f"📌 Token bắt đầu bằng: {TOKEN[:10]}...")
+            
+            # Thử kết nối
             await bot.start(TOKEN)
             break
+            
+        except discord.errors.LoginFailure as e:
+            print(f"❌ LỖI LOGIN: Token không hợp lệ! {e}")
+            print(f"📌 5 ký tự cuối token: ...{TOKEN[-5:]}")
+            print(f"🔄 Vui lòng kiểm tra lại token trên Discord Developer Portal")
+            break  # Dừng lại nếu token sai
+            
         except discord.errors.HTTPException as e:
             if e.status == 429:  # Rate limit
                 delay = base_delay * (2 ** min(attempt, 5)) + random.randint(30, 60)
@@ -940,10 +950,12 @@ async def run_bot():
             else:
                 print(f"❌ Lỗi HTTP: {e}")
                 raise e
+                
         except Exception as e:
-            print(f"❌ Lỗi không xác định: {e}")
-            await asyncio.sleep(60)  # Chờ 1 phút rồi thử lại
+            print(f"❌ Lỗi không xác định: {type(e).__name__}: {e}")
+            await asyncio.sleep(60)
             continue
 
 if __name__ == "__main__":
+    print("🚀 Bắt đầu chạy bot...")
     asyncio.run(run_bot())
