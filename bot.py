@@ -103,12 +103,16 @@ def init_database():
 
 def load_from_db():
     if not DATABASE_URL:
+        print("⚠️ [DEBUG] DATABASE_URL is None")
         return None
     try:
+        print("🔍 [DEBUG] Attempting to connect to database...")
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
+        print("🔍 [DEBUG] Connected. Executing SELECT...")
         cur.execute("SELECT riot_id, data FROM players")
         rows = cur.fetchall()
+        print(f"🔍 [DEBUG] SELECT returned {len(rows)} rows")
         players = {riot_id: data for riot_id, data in rows}
         cur.execute("SELECT message_id FROM leaderboard_history ORDER BY id DESC LIMIT 1")
         msg_row = cur.fetchone()
@@ -117,10 +121,13 @@ def load_from_db():
         result = {"players": players}
         if msg_row:
             result["leaderboard_message_id"] = int(msg_row[0])
-        print(f"✅ Loaded {len(players)} players from database")
+        print(f"✅ [DEBUG] load_from_db() success: {len(players)} players")
         return result
     except Exception as e:
-        print(f"❌ Database load error: {e}")
+        # In ra lỗi chi tiết
+        import traceback
+        print(f"❌ [DEBUG] Database load error: {e}")
+        print(traceback.format_exc())  # Dòng này sẽ in ra stack trace đầy đủ
         return None
 
 def save_to_db(data):
