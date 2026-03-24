@@ -76,7 +76,8 @@ def init_database():
         cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS players (
-                riot_id TEXT PRIMARY KEY,
+                puuid TEXT PRIMARY KEY,
+                riot_id TEXT NOT NULL,
                 data JSONB NOT NULL,
                 discord_id TEXT,
                 discord_name TEXT,
@@ -110,10 +111,18 @@ def load_from_db():
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         print("🔍 [DEBUG] Connected. Executing SELECT...")
-        cur.execute("SELECT riot_id, data FROM players")
+        cur.execute("SELECT puuid, riot_id, data, discord_id, discord_name FROM players")
         rows = cur.fetchall()
         print(f"🔍 [DEBUG] SELECT returned {len(rows)} rows")
-        players = {riot_id: data for riot_id, data in rows}
+        players = {}
+        for puuid, riot_id, data, discord_id, discord_name in rows:
+            players[puuid] = {
+                "riot_id": riot_id,
+                "puuid": puuid,
+                **data,
+                "discord_id": discord_id,
+                "discord_name": discord_name
+            }
         cur.execute("SELECT message_id FROM leaderboard_history ORDER BY id DESC LIMIT 1")
         msg_row = cur.fetchone()
         cur.close()
@@ -124,10 +133,9 @@ def load_from_db():
         print(f"✅ [DEBUG] load_from_db() success: {len(players)} players")
         return result
     except Exception as e:
-        # In ra lỗi chi tiết
         import traceback
         print(f"❌ [DEBUG] Database load error: {e}")
-        print(traceback.format_exc())  # Dòng này sẽ in ra stack trace đầy đủ
+        print(traceback.format_exc())
         return None
 
 def save_to_db(data):
@@ -137,10 +145,13 @@ def save_to_db(data):
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         cur.execute("DELETE FROM players")
-        for riot_id, player_data in data["players"].items():
+        for key, player_data in data["players"].items():
+            # key có thể là puuid hoặc riot_id cũ, cần xử lý
+            puuid = player_data.get("puuid", key)
             cur.execute(
-                "INSERT INTO players (riot_id, data, discord_id, discord_name) VALUES (%s, %s, %s, %s)",
-                (riot_id, Json(player_data), player_data.get("discord_id"), player_data.get("discord_name"))
+                "INSERT INTO players (puuid, riot_id, data, discord_id, discord_name) VALUES (%s, %s, %s, %s, %s)",
+                (puuid, player_data.get("riot_id", key), Json(player_data), 
+                 player_data.get("discord_id"), player_data.get("discord_name"))
             )
         if data.get("leaderboard_message_id"):
             cur.execute("DELETE FROM leaderboard_history")
@@ -159,7 +170,7 @@ def save_to_db(data):
         print(f"❌ Database save error: {e}")
         return False
 
-# ==================== JSON FALLBACK ====================
+# ==================== JSON FALLBACK (Giữ nguyên cấu trúc cũ để tương thích) ====================
 
 def load_from_json():
     if os.path.exists(DATA_FILE):
@@ -216,6 +227,7 @@ def rank_score(p):
     return RANK_ORDER.get(tier, -1) * 10000 + DIVISION_ORDER.get(division, 0) * 1000 + lp
 
 async def fetch_player_rank(riot_id: str) -> dict:
+    """Lấy rank từ Riot API, tự động phát hiện tên mới nếu người chơi đổi"""
     if "#" not in riot_id:
         return {"error": "Riot ID phải có dạng Tên#TAG (VD: Faker#KR1)"}
 
@@ -223,6 +235,7 @@ async def fetch_player_rank(riot_id: str) -> dict:
     name_enc = game_name.replace(" ", "%20")
 
     try:
+        # Bước 1: Lấy PUUID và tên hiện tại từ Riot
         url1 = f"https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name_enc}/{tag_line}"
         async with aiohttp.ClientSession() as s:
             async with s.get(url1, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
@@ -230,13 +243,18 @@ async def fetch_player_rank(riot_id: str) -> dict:
                     return {"error": f"Không tìm thấy tài khoản `{riot_id}`"}
                 account = await r.json()
                 puuid = account.get("puuid")
+                current_game_name = account.get("gameName")
+                current_tag_line = account.get("tagLine")
+                current_riot_id = f"{current_game_name}#{current_tag_line}"
 
+        # Bước 2: Lấy rank bằng PUUID
         url2 = f"https://vn2.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}"
         async with aiohttp.ClientSession() as s:
             async with s.get(url2, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 entries = await r.json() if r.status == 200 else []
 
         if not entries:
+            # Fallback cũ
             url3 = f"https://vn2.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}"
             async with aiohttp.ClientSession() as s:
                 async with s.get(url3, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
@@ -250,11 +268,17 @@ async def fetch_player_rank(riot_id: str) -> dict:
                 async with s.get(url4, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=10)) as r:
                     entries = await r.json() if r.status == 200 else []
 
+        # Xử lý kết quả rank
         solo = next((e for e in entries if e.get("queueType") == "RANKED_SOLO_5x5"), None)
         if not solo:
             solo = next((e for e in entries if e.get("queueType") == "RANKED_FLEX_SR"), None)
         if not solo:
-            return {"riot_id": riot_id, "tier": "UNRANKED", "division": "", "lp": 0, "wins": 0, "losses": 0, "winrate": 0}
+            return {
+                "puuid": puuid,
+                "riot_id": current_riot_id,
+                "tier": "UNRANKED", "division": "", "lp": 0,
+                "wins": 0, "losses": 0, "winrate": 0
+            }
 
         tier = solo.get("tier", "UNRANKED")
         division = solo.get("rank", "")
@@ -264,7 +288,24 @@ async def fetch_player_rank(riot_id: str) -> dict:
         total = wins + losses
         winrate = round(wins / total * 100) if total > 0 else 0
 
-        return {"riot_id": riot_id, "tier": tier, "division": division, "lp": lp, "wins": wins, "losses": losses, "winrate": winrate}
+        result = {
+            "puuid": puuid,
+            "riot_id": current_riot_id,
+            "tier": tier,
+            "division": division,
+            "lp": lp,
+            "wins": wins,
+            "losses": losses,
+            "winrate": winrate
+        }
+        
+        # Kiểm tra nếu tên thay đổi
+        if current_riot_id != riot_id:
+            print(f"🔄 [NAME CHANGE] {riot_id} → {current_riot_id}")
+            result["name_changed"] = True
+            result["old_riot_id"] = riot_id
+        
+        return result
 
     except Exception as e:
         import traceback
@@ -340,13 +381,15 @@ async def daily_leaderboard():
 
     updated_players = []
     rank_changes = []
+    name_changes = []
 
-    for riot_id, pdata in data["players"].items():
+    for key, pdata in data["players"].items():
         old_tier = pdata.get("tier", "UNRANKED")
         old_lp = pdata.get("lp", 0)
         old_division = pdata.get("division", "")
+        old_riot_id = pdata.get("riot_id", key)
 
-        new = await fetch_player_rank(riot_id)
+        new = await fetch_player_rank(old_riot_id)
         await asyncio.sleep(1.5)
 
         if "error" in new:
@@ -355,7 +398,20 @@ async def daily_leaderboard():
 
         new["discord_name"] = pdata.get("discord_name", "")
         new["discord_id"] = pdata.get("discord_id", None)
-        data["players"][riot_id] = new
+        
+        # Nếu phát hiện tên thay đổi, cập nhật key mới trong data
+        if new.get("name_changed"):
+            old_key = new.get("old_riot_id", key)
+            new_key = new.get("riot_id")
+            if old_key in data["players"]:
+                del data["players"][old_key]
+                data["players"][new_key] = new
+                name_changes.append(f"🔄 **{old_key}** → **{new_key}**")
+            else:
+                data["players"][new_key] = new
+        else:
+            data["players"][new.get("riot_id", key)] = new
+        
         updated_players.append(new)
 
         new_tier = new.get("tier", "UNRANKED")
@@ -364,16 +420,16 @@ async def daily_leaderboard():
 
         if new_tier != old_tier or new_division != old_division:
             direction = "📈" if rank_score(new) > rank_score(pdata) else "📉"
-            rank_changes.append(f"{direction} **{riot_id}**: `{old_tier} {old_division}` → `{new_tier} {new_division}`")
+            rank_changes.append(f"{direction} **{new.get('riot_id')}**: `{old_tier} {old_division}` → `{new_tier} {new_division}`")
         elif new_lp != old_lp:
             diff = new_lp - old_lp
             sign = "+" if diff > 0 else ""
             icon = "📈" if diff > 0 else "📉"
-            rank_changes.append(f"{icon} **{riot_id}**: {sign}{diff} LP ({old_lp} → {new_lp})")
+            rank_changes.append(f"{icon} **{new.get('riot_id')}**: {sign}{diff} LP ({old_lp} → {new_lp})")
 
     save_data(data)
 
-    embed = build_leaderboard_embed(updated_players)
+    embed = build_leaderboard_embed([p for p in data["players"].values()])
     new_msg = await channel.send(embed=embed)
 
     history = load_history()
@@ -385,15 +441,21 @@ async def daily_leaderboard():
     })
     save_history(history)
 
-    if rank_changes and notify_ch:
+    # Gửi thông báo thay đổi
+    if rank_changes or name_changes:
         notif = discord.Embed(
-            title=f"📊 Cập nhật rank • {vn_now.strftime('%H:%M %d/%m/%Y')}",
-            description="\n".join(rank_changes[:10]) + ("\n..." if len(rank_changes) > 10 else ""),
+            title=f"📊 Cập nhật • {vn_now.strftime('%H:%M %d/%m/%Y')}",
             color=0x5865F2,
             timestamp=datetime.now(timezone.utc)
         )
-        notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)}")
-        await notify_ch.send(embed=notif)
+        if name_changes:
+            notif.add_field(name="🔄 Đổi tên", value="\n".join(name_changes[:5]), inline=False)
+        if rank_changes:
+            notif.add_field(name="📈 Thay đổi rank", value="\n".join(rank_changes[:10]) + ("\n..." if len(rank_changes) > 10 else ""), inline=False)
+        notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} | Đổi tên: {len(name_changes)}")
+        
+        if notify_ch:
+            await notify_ch.send(embed=notif)
 
     print(f"[OK] Đã tạo bảng lúc {vn_now.strftime('%H:%M:%S %d/%m/%Y')} với {len(updated_players)} người.")
 
@@ -421,13 +483,15 @@ async def bangvang_cmd(ctx):
 
     updated_players = []
     rank_changes = []
+    name_changes = []
 
-    for riot_id, pdata in data["players"].items():
+    for key, pdata in data["players"].items():
         old_tier = pdata.get("tier", "UNRANKED")
         old_lp = pdata.get("lp", 0)
         old_division = pdata.get("division", "")
+        old_riot_id = pdata.get("riot_id", key)
 
-        new = await fetch_player_rank(riot_id)
+        new = await fetch_player_rank(old_riot_id)
         await asyncio.sleep(1.5)
 
         if "error" in new:
@@ -436,7 +500,19 @@ async def bangvang_cmd(ctx):
 
         new["discord_name"] = pdata.get("discord_name", "")
         new["discord_id"] = pdata.get("discord_id", None)
-        data["players"][riot_id] = new
+        
+        if new.get("name_changed"):
+            old_key = new.get("old_riot_id", key)
+            new_key = new.get("riot_id")
+            if old_key in data["players"]:
+                del data["players"][old_key]
+                data["players"][new_key] = new
+                name_changes.append(f"🔄 **{old_key}** → **{new_key}**")
+            else:
+                data["players"][new_key] = new
+        else:
+            data["players"][new.get("riot_id", key)] = new
+        
         updated_players.append(new)
 
         new_tier = new.get("tier", "UNRANKED")
@@ -445,15 +521,15 @@ async def bangvang_cmd(ctx):
 
         if new_tier != old_tier or new_division != old_division:
             direction = "📈" if rank_score(new) > rank_score(pdata) else "📉"
-            rank_changes.append(f"{direction} **{riot_id}**: `{old_tier} {old_division}` → `{new_tier} {new_division}`")
+            rank_changes.append(f"{direction} **{new.get('riot_id')}**: `{old_tier} {old_division}` → `{new_tier} {new_division}`")
         elif new_lp != old_lp:
             diff = new_lp - old_lp
             sign = "+" if diff > 0 else ""
             icon = "📈" if diff > 0 else "📉"
-            rank_changes.append(f"{icon} **{riot_id}**: {sign}{diff} LP ({old_lp} → {new_lp})")
+            rank_changes.append(f"{icon} **{new.get('riot_id')}**: {sign}{diff} LP ({old_lp} → {new_lp})")
 
     save_data(data)
-    embed = build_leaderboard_embed(updated_players)
+    embed = build_leaderboard_embed([p for p in data["players"].values()])
     await msg.delete()
     new_msg = await ctx.send(embed=embed)
 
@@ -466,14 +542,18 @@ async def bangvang_cmd(ctx):
     })
     save_history(history)
 
-    if rank_changes:
+    if rank_changes or name_changes:
         notif = discord.Embed(
-            title=f"📊 Cập nhật rank • {datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')}",
-            description="\n".join(rank_changes[:10]) + ("\n..." if len(rank_changes) > 10 else ""),
+            title=f"📊 Cập nhật • {datetime.now(VN_TZ).strftime('%H:%M %d/%m/%Y')}",
             color=0x5865F2,
             timestamp=datetime.now(timezone.utc)
         )
-        notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} • Người dùng: {ctx.author.display_name}")
+        if name_changes:
+            notif.add_field(name="🔄 Đổi tên", value="\n".join(name_changes[:5]), inline=False)
+        if rank_changes:
+            notif.add_field(name="📈 Thay đổi rank", value="\n".join(rank_changes[:10]) + ("\n..." if len(rank_changes) > 10 else ""), inline=False)
+        notif.set_footer(text=f"Tổng số thay đổi: {len(rank_changes)} • Đổi tên: {len(name_changes)} • Người dùng: {ctx.author.display_name}")
+        
         await ctx.send(embed=notif)
         if NOTIFY_CHANNEL_ID:
             notify_ch = bot.get_channel(NOTIFY_CHANNEL_ID)
@@ -490,6 +570,7 @@ async def register(ctx, *, riot_id: str = None):
         return
 
     data = load_data()
+    # Kiểm tra xem user đã đăng ký chưa
     existing = next((k for k, v in data["players"].items() if v.get("discord_id") == ctx.author.id), None)
     if existing:
         await ctx.send(f"⚠️ Bạn đã đăng ký **{existing}** rồi. Dùng `!unregister` để hủy trước.")
@@ -504,7 +585,10 @@ async def register(ctx, *, riot_id: str = None):
 
     result["discord_name"] = ctx.author.display_name
     result["discord_id"] = ctx.author.id
-    data["players"][riot_id] = result
+    
+    # Lưu với key là puuid hoặc riot_id
+    key = result.get("puuid", result.get("riot_id"))
+    data["players"][key] = result
     save_data(data)
 
     tier = result.get("tier", "UNRANKED")
@@ -512,12 +596,16 @@ async def register(ctx, *, riot_id: str = None):
     division = result.get("division", "")
     lp = result.get("lp", 0)
     rank_str = f"{tier} {division} {lp} LP".strip() if tier != "UNRANKED" else "Unranked"
-    await msg.edit(content=f"✅ **{ctx.author.display_name}** đã đăng ký!\n{emoji} **{riot_id}** — `{rank_str}`")
+    await msg.edit(content=f"✅ **{ctx.author.display_name}** đã đăng ký!\n{emoji} **{result['riot_id']}** — `{rank_str}`")
 
 @bot.command(name="unregister")
 async def unregister(ctx):
     data = load_data()
-    found = next((k for k, v in data["players"].items() if v.get("discord_id") == ctx.author.id), None)
+    found = None
+    for key, v in data["players"].items():
+        if v.get("discord_id") == ctx.author.id:
+            found = key
+            break
     if not found:
         await ctx.send("❌ Bạn chưa đăng ký. Dùng `!register <Tên#TAG>`.")
         return
@@ -539,17 +627,24 @@ async def add_player(ctx, riot_id: str = None, member: discord.Member = None):
     data = load_data()
     result["discord_name"] = member.display_name if member else ""
     result["discord_id"] = member.id if member else None
-    data["players"][riot_id] = result
+    key = result.get("puuid", result.get("riot_id"))
+    data["players"][key] = result
     save_data(data)
     emoji = RANK_EMOJI.get(result.get("tier", "UNRANKED").upper(), "❓")
-    await msg.edit(content=f"✅ Đã thêm {emoji} **{riot_id}**!")
+    await msg.edit(content=f"✅ Đã thêm {emoji} **{result['riot_id']}**!")
 
 @bot.command(name="removeplayer")
 @commands.has_permissions(manage_guild=True)
 async def remove_player(ctx, *, riot_id: str):
     data = load_data()
-    if riot_id in data["players"]:
-        del data["players"][riot_id]
+    # Tìm theo riot_id hoặc puuid
+    found = None
+    for key, v in data["players"].items():
+        if v.get("riot_id") == riot_id or key == riot_id:
+            found = key
+            break
+    if found:
+        del data["players"][found]
         save_data(data)
         await ctx.send(f"✅ Đã xóa **{riot_id}**.")
     else:
@@ -573,9 +668,10 @@ async def rank_cmd(ctx, *, riot_id: str = None):
     winrate = result.get("winrate", 0)
     wins = result.get("wins", 0)
     losses = result.get("losses", 0)
+    display_name = result.get("riot_id", riot_id)
 
     color = 0xC89B3C if winrate >= 55 else (0x5865F2 if winrate >= 50 else 0xFF4444)
-    embed = discord.Embed(title=f"{emoji} {riot_id}", color=color)
+    embed = discord.Embed(title=f"{emoji} {display_name}", color=color)
 
     if tier == "UNRANKED":
         embed.add_field(name="Rank", value="`Unranked`", inline=True)
@@ -611,7 +707,7 @@ async def players_cmd(ctx):
     if not data["players"]:
         await ctx.send("Chưa có ai. Dùng `!register <Tên#TAG>` để đăng ký!")
         return
-    names = "\n".join([f"• {k}" for k in data["players"].keys()])
+    names = "\n".join([f"• {v.get('riot_id', k)}" for k, v in data["players"].items()])
     await ctx.send(f"**{len(data['players'])} người:**\n{names}")
 
 @bot.command(name="next")
@@ -631,7 +727,8 @@ async def next_cmd(ctx):
 async def help_cmd(ctx):
     embed = discord.Embed(
         title="📖 Hướng dẫn Bot LoL Rank",
-        description="Bot tự động cập nhật bảng xếp hạng **lúc 7h sáng mỗi ngày** (giờ Việt Nam)",
+        description="Bot tự động cập nhật bảng xếp hạng **lúc 7h sáng mỗi ngày** (giờ Việt Nam)\n"
+                    "🔁 **Tự động phát hiện và cập nhật khi người chơi đổi tên!**",
         color=0x5865F2
     )
     embed.add_field(name="🙋 Mọi người", value=(
@@ -647,6 +744,7 @@ async def help_cmd(ctx):
         "`!addplayer <Tên#TAG> [@discord]` — Thêm người chơi\n"
         "`!removeplayer <Tên#TAG>` — Xóa người chơi"
     ), inline=False)
+    embed.add_field(name="🔄 Đổi tên", value="Khi người chơi đổi Riot ID, bot sẽ tự động phát hiện và cập nhật trong lần cập nhật tiếp theo!", inline=False)
     embed.set_footer(text="Cập nhật lúc 7h sáng hàng ngày • Riot API VN2")
     await ctx.send(embed=embed)
 
@@ -659,6 +757,7 @@ async def on_ready():
     print(f"📋 Leaderboard channel: {LEADERBOARD_CHANNEL_ID}")
     print(f"🔔 Notify channel: {NOTIFY_CHANNEL_ID}")
     print(f"⏰ Tự động cập nhật lúc 7h sáng giờ Việt Nam")
+    print(f"🔄 Đã bật chức năng tự động phát hiện đổi tên!")
     init_database()
     await asyncio.sleep(random.randint(2, 5))
     daily_leaderboard.start()
