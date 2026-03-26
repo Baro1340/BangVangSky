@@ -151,7 +151,7 @@ def save_to_db(data):
             cur.execute(
                 "INSERT INTO players (puuid, riot_id, data, discord_id, discord_name) VALUES (%s, %s, %s, %s, %s)",
                 (puuid, player_data.get("riot_id", key), Json(player_data), 
-                 player_data.get("discord_id"), player_data.get("discord_name"))
+                 player_data.get("discord_id"), player_data.get("discord_name"), player_data.get("puuid"))
             )
         if data.get("leaderboard_message_id"):
             cur.execute("DELETE FROM leaderboard_history")
